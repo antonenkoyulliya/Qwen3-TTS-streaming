@@ -807,6 +807,86 @@ class Qwen3TTSModel:
         ):
             yield chunk, sr
 
+    # Add this method to the Qwen3TTSModel class
+    @torch.inference_mode()
+    def stream_generate_pcm(
+        self,
+        text: str,
+        speaker: str,
+        language: str = None,
+        emit_every_frames: int = 8,
+        decode_window_frames: int = 80,
+        overlap_samples: int = 0,
+        max_frames: int = 10000,
+        use_optimized_decode: bool = True,
+        **kwargs,
+    ) -> Generator[Tuple[np.ndarray, int], None, None]:
+        """
+        Stream speech generation with predefined voices using PCM streaming.
+    
+        This method provides direct streaming access to predefined voices (Vivian, Serena, etc.)
+        without requiring voice cloning prompts.
+    
+        Args:
+            text: Text to synthesize (single string only).
+            speaker: Predefined voice name (e.g., "Vivian", "Serena").
+            language: Language for synthesis (default: "Auto").
+            emit_every_frames: Emit PCM chunk every N codec frames.
+            decode_window_frames: Window size for decoding (longer = better quality, more latency).
+            overlap_samples: Overlap samples for crossfade between chunks.
+            max_frames: Maximum codec frames to generate.
+            use_optimized_decode: Use CUDA graph optimized decode when available.
+            **kwargs: Generation parameters (do_sample, top_k, top_p, temperature, etc.)
+    
+        Yields:
+            Tuple[np.ndarray, int]: (pcm_chunk as float32 array, sample_rate)
+        """
+        if self.model.tts_model_type != "custom_voice":
+            raise ValueError(
+                f"model with tts_model_type={self.model.tts_model_type} "
+                "does not support stream_generate_pcm. Use custom_voice model type."
+            )
+    
+        if isinstance(text, list):
+            raise ValueError("stream_generate_pcm only supports single text, not batch")
+    
+        texts = [text]
+        speakers = [speaker]
+        languages = [language if language is not None else "Auto"]
+        
+        self._validate_languages(languages)
+        self._validate_speakers(speakers)
+    
+        # Build input IDs
+        input_texts = [self._build_assistant_text(t) for t in texts]
+        input_ids = self._tokenize_texts(input_texts)
+    
+        # No instruct for direct PCM streaming
+        instruct_ids = [None]
+    
+        # Merge generation kwargs
+        gen_kwargs = self._merge_generate_kwargs(**kwargs)
+        supported_params = {
+            "do_sample", "top_k", "top_p", "temperature",
+            "subtalker_dosample", "subtalker_top_k", "subtalker_top_p", "subtalker_temperature"
+        }
+        gen_kwargs = {k: v for k, v in gen_kwargs.items() if k in supported_params}
+    
+        # Call the core model's stream_generate_pcm
+        for chunk, sr in self.model.stream_generate_pcm(
+            input_ids=input_ids,
+            instruct_ids=instruct_ids,
+            speakers=speakers,
+            languages=languages,
+            emit_every_frames=emit_every_frames,
+            decode_window_frames=decode_window_frames,
+            overlap_samples=overlap_samples,
+            max_frames=max_frames,
+            use_optimized_decode=use_optimized_decode,
+            **gen_kwargs,
+        ):
+            yield chunk, sr
+
     # voice design model
     @torch.no_grad()
     def generate_voice_design(
